@@ -1,0 +1,304 @@
+---
+title: "Practicum 1"
+output: html_notebook
+Author: Aadhar_Bansal, Shanmugam_Sankarakumar
+email1: bansal.aad@northeastern.edu
+email2: sankarakumar.s@northeastern.edu
+---
+
+```{r}
+rm(list = ls())
+library(RMySQL)
+library(DBI)
+```
+
+
+
+```{r}
+db_user <- 'admin'
+db_password <- 'Dbms1234'
+db_name <- 'SandboxDB'
+db_host <- "cs5200fall-dbs.c6krysz4zcz9.us-east-1.rds.amazonaws.com" # AWS HOST
+db_port <- 3306
+
+
+mydb <- dbConnect(MySQL(), user = db_user, password = db_password,
+                 dbname = db_name, host = db_host, port = db_port)
+```
+
+This Parcticum 1 is done as a pair by Aadhar_Bansal and Shanmugam_Sankarakumar. we started working on the practicum together from start till the end, we didn't splitup.
+
+## Q1
+## Drop table if exists
+
+```{sql connection=mydb}
+
+DROP TABLE IF EXISTS incidents
+
+```
+
+```{sql connection=mydb}
+
+DROP TABLE IF EXISTS airports
+
+```
+
+```{sql connection=mydb}
+
+DROP TABLE IF EXISTS conditions
+
+```
+
+
+
+
+## Creating database tables
+```{sql connection=mydb}
+CREATE TABLE airports (
+  aid INT NOT NULL,
+  airportName VARCHAR(45) NOT NULL,
+  airportCode VARCHAR(45) NULL,
+  state VARCHAR(45) NULL,
+  PRIMARY KEY (aid));
+```
+
+#Creating lookup table conditions
+```{sql connection=mydb}
+CREATE TABLE `SandboxDB`.`conditions` (
+  `cid` INT NOT NULL,
+  `condition` VARCHAR(45) NOT NULL,
+  `explanation` VARCHAR(45) NULL,
+  PRIMARY KEY (`cid`));
+
+
+```
+
+creating table incidetns
+```{sql connection=mydb}
+CREATE TABLE incidents (
+  rid INT NOT NULL,
+  date VARCHAR(45) NOT NULL,
+  arid INT NOT NULL,
+  origin VARCHAR(45) NOT NULL,
+  airline VARCHAR(45) NOT NULL,
+  aircraft VARCHAR(45) NOT NULL,
+  flightPhase VARCHAR(45) NOT NULL,
+  altitude  INT NOT NULL,
+  conditions VARCHAR(45) NULL,
+  crid INT NOT NULL,
+  warning VARCHAR(45) NOT NULL,
+  PRIMARY KEY (rid),
+  FOREIGN KEY (arid) REFERENCES airports(aid),
+  FOREIGN KEY (crid) REFERENCES conditions(cid)
+  );
+
+```
+
+
+
+## Q2 Reading the CSV File and then Processing.
+
+```{r loadCSV}
+raw_file = "BirdStrikesData-V2.csv"
+
+df_raw <- read.csv(file = raw_file,
+                   header = T,
+                   stringsAsFactors = F)
+```
+
+#This code removes the military flights from the airline column
+```{r Removing the Military flight}
+df_raw <- subset(df_raw, df_raw$airline != "MILITARY")
+num_of_rows <- nrow(df_raw)
+```
+#If the row values of the airport column is empty we give it unknown
+```{r}
+for (i in 1:num_of_rows){
+  if(df_raw[i, "airport"] == "")
+  {
+    df_raw[i, "airport"] = "UNKNOWN"
+  }
+  
+  if(df_raw[i, "airline"] == "")
+  {
+    df_raw[i, "airline"] = "UNKNOWN"
+    }
+}
+```
+
+#Providing data from csv to the dataframe
+```{r incidents dataframe}
+num_of_rows <- nrow(df_raw)
+df_incidents <- data.frame(rid = df_raw$rid, 
+                           date = df_raw$flight_date,
+                           arid = 1,
+                           origin = df_raw$origin,
+                           airline = df_raw$airline,
+                           aircraft = df_raw$aircraft,
+                           flightPhase = df_raw$flight_phase,
+                           altitude = df_raw$altitude_ft,
+                           conditions = df_raw$sky_conditions,
+                           warning = df_raw$pilot_warned_flag
+                           
+                           ) 
+```
+
+#Providing lookup tables conditions
+```{r lookUp table conditions}
+cond_df_raw = unique(df_incidents["conditions"])
+len_cond = nrow(cond_df_raw)
+df_conditions <- data.frame(cid = seq(1,len_cond),
+                            condition = cond_df_raw$conditions,
+                            explanation = ""
+                            )
+```
+
+```{r airports}
+df_airports <- data.frame(
+                          airportName = df_raw$airport,
+                          airportCode = "",
+                          state = df_raw$origin
+                            )
+
+
+```
+
+## dataframe new_df_airports, which stores the distinct of df_airports
+```{r new_df_airport}
+new_df_airport = unique(df_airports)
+len_new_df_airport = nrow(new_df_airport)
+
+```
+
+## intializing the aid
+```{r}
+for (i in 1:len_new_df_airport){
+  new_df_airport[i, "aid"] = 9 + i
+}
+```
+
+
+## insering aid in the incidents table
+```{r}
+for (r in 1:num_of_rows) {
+  # find the airline PK for that flight in the airlines table
+    df_incidents$arid[r] <- new_df_airport$aid[new_df_airport$airportName == df_raw$airport[r]]
+  
+} 
+```
+#The warnings were neglected as we got proper output for the table incidents
+
+## Splitting date and choosing date and neglecting time
+```{r}
+df_incidents$date <- substr(as.character(df_incidents$date), 1, nchar(as.character(df_incidents$date))-5)
+```
+
+
+
+## Q3 data from dataFrames
+
+```{r}
+head(df_incidents)
+```
+
+```{r}
+head(new_df_airport)
+```
+
+```{r}
+df_conditions
+```
+
+# Writing DataFrame back to Database
+```{r Writing in Database}
+dbWriteTable(mydb, "incidents", df_incidents, overwrite = T)
+dbWriteTable(mydb, "airports", new_df_airport, overwrite = T)
+dbWriteTable(mydb, "conditions", df_conditions, overwrite = T)
+
+
+```
+
+
+## Q4
+#Finding top 10 airlines with greatest incidents
+```{sql connection=mydb}
+SELECT COUNT(row_names) as total, airline FROM incidents
+GROUP BY airline
+ORDER BY COUNT(row_names) desc limit 10
+
+```
+
+## Q5
+#Displaying flight phase column which has above average no.of bird strike incidents
+```{sql connection=mydb}
+SELECT flightPhase, count(row_names) as Above_Average From incidents
+GROUP BY flightPhase 
+HAVING Above_Average > ((SELECT Count(row_names) FROM incidents)/(SELECT Count(DISTINCT flightPhase) FROM incidents))
+ORDER BY Above_Average desc
+```
+
+
+## Q6
+#Number of bird strike incidents by month
+```{sql connection=mydb}
+SELECT COUNT(format(date, "yyyy_mm")) as month_count, format(date, "yyyy_mm") as month FROM incidents
+GROUP BY (format(date, "yyyy_mm"))
+
+```
+
+## Q7
+#Displaying bargraph for birdstike incidents by year
+```{r}
+sqlCmd = "select COUNT(row_names) as count, RIGHT(date, 4) as year from incidents
+ group by year
+ having year >=2005 and year<=2011
+ Order by year desc;";
+
+
+rs = dbGetQuery(mydb, sqlCmd)
+
+year <- c("2005","2006","2007","2008", "2009", "2010", "2011")
+
+
+barplot(rs$count, names.arg = rs$year, xlab ="Year", ylab ="No of Bird Strikes", main="Bird Strikes by Year", col = "blue")
+
+```
+
+## Q8
+```{sql connection=mydb}
+
+DROP PROCEDURE IF EXISTS insertNEWIncident
+
+```
+
+## Creating Procedure
+```{sql connection=mydb}
+CREATE PROCEDURE insertNEWIncident(IN row_names TEXT,
+        rid BIGINT,
+        date TEXT,
+        arid DOUBLE,
+        origin TEXT,
+        airline TEXT,
+        aircraft TEXT,
+        flightPhase TEXT,
+        altitude  TEXT,
+        conditions TEXT,
+        warning TEXT)
+BEGIN
+    INSERT INTO incidents
+    VALUES(row_names, rid, date, arid, origin, airline, aircraft, flightPhase, altitude, conditions,             warning);
+END
+```
+
+## Calling Procedure
+```{sql connection=mydb}
+call insertNewIncident("1234456", 1, "10/30/2022", 9, "Delhi", "IndianAirways", "Airplane", "Climb", "0", "No Cloud","N")
+```
+
+## Checking Procedure
+```{sql connection=mydb}
+SELECT * from incidents
+WHERE origin = "Delhi"
+```
+
+
